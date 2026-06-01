@@ -8,6 +8,7 @@ st.set_page_config(page_title="DXY, Equities, Yields and VIXEQ", layout="wide")
 st.title("DXY, Equities, Yield Differentials and VIXEQ")
 
 START_DATE = "1973-01-01"
+VIX_FILE = "vix_data.xlsx"
 
 
 @st.cache_data
@@ -15,7 +16,6 @@ def get_yahoo_close(ticker, name):
     df = yf.download(ticker, start=START_DATE, auto_adjust=True, progress=False)
 
     if df.empty:
-        st.warning(f"No Yahoo data downloaded for {ticker}")
         return pd.Series(dtype=float, name=name)
 
     close = df["Close"]
@@ -37,14 +37,43 @@ def get_fred_series(series_id, name):
     return s.loc[START_DATE:].dropna().rename(name)
 
 
+@st.cache_data
+def load_vixeq_file():
+    df = pd.read_excel(VIX_FILE)
+
+    df = df.rename(columns={
+        "Date": "Date",
+        "VIXEQ Index  (L1)": "VIXEQ",
+        "VIX Index  (R1)": "VIX",
+        "SPX Index  (R2)": "S&P 500"
+    })
+
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.set_index("Date").sort_index()
+
+    df = df[["VIXEQ", "VIX", "S&P 500"]]
+    df = df.apply(pd.to_numeric, errors="coerce")
+    df = df.dropna()
+
+    weekly = df.resample("W-FRI").last().dropna()
+
+    weekly["VIXEQ minus VIX"] = weekly["VIXEQ"] - weekly["VIX"]
+    weekly["VIXEQ / VIX"] = weekly["VIXEQ"] / weekly["VIX"]
+
+    weekly["VIXEQ/VIX z-score"] = (
+        weekly["VIXEQ / VIX"] - weekly["VIXEQ / VIX"].rolling(52).mean()
+    ) / weekly["VIXEQ / VIX"].rolling(52).std()
+
+    weekly["Forward 3m S&P return"] = weekly["S&P 500"].shift(-13) / weekly["S&P 500"] - 1
+    weekly["Forward 6m S&P return"] = weekly["S&P 500"].shift(-26) / weekly["S&P 500"] - 1
+    weekly["Forward 12m S&P return"] = weekly["S&P 500"].shift(-52) / weekly["S&P 500"] - 1
+
+    return weekly
+
+
 def plot_lines(title, df):
     st.subheader(title)
-
     df = df.dropna(how="all")
-
-    if df.empty:
-        st.warning(f"No data available for: {title}")
-        return
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -63,12 +92,7 @@ def dual_chart(title, left, left_label, right, right_label):
 
     df = pd.concat([left, right], axis=1).dropna()
 
-    if df.empty:
-        st.warning(f"No data available for: {title}")
-        return
-
     fig, ax1 = plt.subplots(figsize=(14, 6))
-
     ax1.plot(df.index, df.iloc[:, 0])
     ax1.set_ylabel(left_label)
 
@@ -84,10 +108,6 @@ def scatter_chart(title, x, y, x_label, y_label):
     st.subheader(title)
 
     df = pd.concat([x, y], axis=1).dropna()
-
-    if df.empty:
-        st.warning(f"No data available for: {title}")
-        return
 
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.scatter(df.iloc[:, 0], df.iloc[:, 1], alpha=0.5)
@@ -127,44 +147,15 @@ def load_core_data():
         + 0.119 * data["US-UK 10Y spread"]
     )
 
-    weekly = data.resample("W-FRI").last()
-
-    return weekly
-
-
-@st.cache_data
-def load_vix_data():
-    vix = get_yahoo_close("^VIX", "VIX")
-    vixeq = get_yahoo_close("^VIXEQ", "VIXEQ")
-    spx = get_yahoo_close("^GSPC", "S&P 500")
-
-    data = pd.concat([vix, vixeq, spx], axis=1).sort_index()
-    weekly = data.resample("W-FRI").last().dropna()
-
-    if weekly.empty:
-        return weekly
-
-    weekly["VIXEQ minus VIX"] = weekly["VIXEQ"] - weekly["VIX"]
-    weekly["VIXEQ / VIX"] = weekly["VIXEQ"] / weekly["VIX"]
-
-    weekly["Forward 3m S&P return"] = weekly["S&P 500"].shift(-13) / weekly["S&P 500"] - 1
-    weekly["Forward 6m S&P return"] = weekly["S&P 500"].shift(-26) / weekly["S&P 500"] - 1
-    weekly["Forward 12m S&P return"] = weekly["S&P 500"].shift(-52) / weekly["S&P 500"] - 1
-
-    return weekly
+    return data.resample("W-FRI").last()
 
 
 core = load_core_data()
-vixdata = load_vix_data()
+vixdata = load_vixeq_file()
 
 st.write(f"Core data runs from **{core.dropna(how='all').index.min().date()}** to **{core.dropna(how='all').index.max().date()}**.")
+st.write(f"VIXEQ data runs from **{vixdata.index.min().date()}** to **{vixdata.index.max().date()}**.")
 
-if not vixdata.empty:
-    st.write(f"VIXEQ data runs from **{vixdata.index.min().date()}** to **{vixdata.index.max().date()}**.")
-else:
-    st.warning("No usable VIXEQ data was downloaded from Yahoo. The VIXEQ section will be skipped.")
-
-# Returns and correlations
 dxy_returns = core["DXY"].pct_change()
 spx_returns = core["S&P 500"].pct_change()
 relative_returns = core["US relative performance"].pct_change()
@@ -216,103 +207,131 @@ dual_chart(
 
 st.header("3. VIXEQ vs VIX dispersion signal")
 
-if not vixdata.empty:
-    dual_chart("VIXEQ vs VIX", vixdata["VIXEQ"], "VIXEQ", vixdata["VIX"], "VIX")
+dual_chart("VIXEQ vs VIX", vixdata["VIXEQ"], "VIXEQ", vixdata["VIX"], "VIX")
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(vixdata.index, vixdata["VIXEQ minus VIX"])
-    ax.axhline(0, linestyle="--")
-    ax.set_title("VIXEQ minus VIX")
-    ax.set_ylabel("Vol points")
-    st.pyplot(fig)
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(vixdata.index, vixdata["VIXEQ minus VIX"])
+ax.axhline(0, linestyle="--")
+ax.set_title("VIXEQ minus VIX")
+ax.set_ylabel("Vol points")
+st.pyplot(fig)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(vixdata.index, vixdata["VIXEQ / VIX"])
-    ax.axhline(1, linestyle="--")
-    ax.set_title("VIXEQ / VIX")
-    ax.set_ylabel("Ratio")
-    st.pyplot(fig)
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(vixdata.index, vixdata["VIXEQ / VIX"])
+ax.axhline(1, linestyle="--")
+ax.set_title("VIXEQ / VIX")
+ax.set_ylabel("Ratio")
+st.pyplot(fig)
 
-    st.header("4. VIXEQ signal vs forward S&P 500 returns")
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(vixdata.index, vixdata["VIXEQ/VIX z-score"])
+ax.axhline(0, linestyle="--")
+ax.axhline(1, linestyle="--")
+ax.axhline(-1, linestyle="--")
+ax.set_title("VIXEQ/VIX 1-year rolling z-score")
+ax.set_ylabel("Z-score")
+st.pyplot(fig)
 
-    scatter_chart(
-        "VIXEQ minus VIX vs forward 3m return",
-        vixdata["VIXEQ minus VIX"],
-        vixdata["Forward 3m S&P return"],
+st.header("4. VIXEQ signal vs forward S&P 500 returns")
+
+scatter_chart(
+    "VIXEQ minus VIX vs forward 3m return",
+    vixdata["VIXEQ minus VIX"],
+    vixdata["Forward 3m S&P return"],
+    "VIXEQ minus VIX",
+    "Forward 3m return",
+)
+
+scatter_chart(
+    "VIXEQ minus VIX vs forward 6m return",
+    vixdata["VIXEQ minus VIX"],
+    vixdata["Forward 6m S&P return"],
+    "VIXEQ minus VIX",
+    "Forward 6m return",
+)
+
+scatter_chart(
+    "VIXEQ minus VIX vs forward 12m return",
+    vixdata["VIXEQ minus VIX"],
+    vixdata["Forward 12m S&P return"],
+    "VIXEQ minus VIX",
+    "Forward 12m return",
+)
+
+scatter_chart(
+    "VIXEQ / VIX vs forward 12m return",
+    vixdata["VIXEQ / VIX"],
+    vixdata["Forward 12m S&P return"],
+    "VIXEQ / VIX",
+    "Forward 12m return",
+)
+
+st.header("5. Quintile analysis")
+
+test = vixdata[
+    [
         "VIXEQ minus VIX",
-        "Forward 3m return",
-    )
+        "VIXEQ / VIX",
+        "VIXEQ/VIX z-score",
+        "Forward 3m S&P return",
+        "Forward 6m S&P return",
+        "Forward 12m S&P return",
+    ]
+].dropna()
 
-    scatter_chart(
-        "VIXEQ minus VIX vs forward 6m return",
-        vixdata["VIXEQ minus VIX"],
-        vixdata["Forward 6m S&P return"],
-        "VIXEQ minus VIX",
-        "Forward 6m return",
-    )
+test["Gap quintile"] = pd.qcut(
+    test["VIXEQ minus VIX"],
+    5,
+    labels=["Lowest", "Low", "Middle", "High", "Highest"],
+    duplicates="drop",
+)
 
-    scatter_chart(
-        "VIXEQ minus VIX vs forward 12m return",
-        vixdata["VIXEQ minus VIX"],
-        vixdata["Forward 12m S&P return"],
-        "VIXEQ minus VIX",
-        "Forward 12m return",
-    )
+test["Ratio quintile"] = pd.qcut(
+    test["VIXEQ / VIX"],
+    5,
+    labels=["Lowest", "Low", "Middle", "High", "Highest"],
+    duplicates="drop",
+)
 
-    st.header("5. Quintile analysis")
+gap_table = test.groupby("Gap quintile")[
+    [
+        "Forward 3m S&P return",
+        "Forward 6m S&P return",
+        "Forward 12m S&P return",
+    ]
+].mean()
 
-    test = vixdata[
-        [
-            "VIXEQ minus VIX",
-            "VIXEQ / VIX",
-            "Forward 3m S&P return",
-            "Forward 6m S&P return",
-            "Forward 12m S&P return",
-        ]
-    ].dropna()
+ratio_table = test.groupby("Ratio quintile")[
+    [
+        "Forward 3m S&P return",
+        "Forward 6m S&P return",
+        "Forward 12m S&P return",
+    ]
+].mean()
 
-    if len(test) >= 30 and test["VIXEQ minus VIX"].nunique() >= 5:
-        test["Gap quintile"] = pd.qcut(
-            test["VIXEQ minus VIX"],
-            5,
-            labels=["Lowest", "Low", "Middle", "High", "Highest"],
-            duplicates="drop",
-        )
+st.subheader("Average forward returns by VIXEQ-VIX gap quintile")
+st.dataframe(gap_table.style.format("{:.2%}"))
 
-        gap_table = test.groupby("Gap quintile")[
-            [
-                "Forward 3m S&P return",
-                "Forward 6m S&P return",
-                "Forward 12m S&P return",
-            ]
-        ].mean()
+st.subheader("Average forward returns by VIXEQ/VIX ratio quintile")
+st.dataframe(ratio_table.style.format("{:.2%}"))
 
-        st.subheader("Average forward returns by VIXEQ-VIX gap quintile")
-        st.dataframe(gap_table.style.format("{:.2%}"))
-    else:
-        st.warning("Not enough VIXEQ history for reliable quintile analysis.")
+st.header("6. Extreme-event study")
 
-    if len(test) >= 30 and test["VIXEQ / VIX"].nunique() >= 5:
-        test["Ratio quintile"] = pd.qcut(
-            test["VIXEQ / VIX"],
-            5,
-            labels=["Lowest", "Low", "Middle", "High", "Highest"],
-            duplicates="drop",
-        )
+low_gap = test[test["VIXEQ minus VIX"] <= test["VIXEQ minus VIX"].quantile(0.10)]
+high_gap = test[test["VIXEQ minus VIX"] >= test["VIXEQ minus VIX"].quantile(0.90)]
 
-        ratio_table = test.groupby("Ratio quintile")[
-            [
-                "Forward 3m S&P return",
-                "Forward 6m S&P return",
-                "Forward 12m S&P return",
-            ]
-        ].mean()
+low_ratio = test[test["VIXEQ / VIX"] <= test["VIXEQ / VIX"].quantile(0.10)]
+high_ratio = test[test["VIXEQ / VIX"] >= test["VIXEQ / VIX"].quantile(0.90)]
 
-        st.subheader("Average forward returns by VIXEQ/VIX ratio quintile")
-        st.dataframe(ratio_table.style.format("{:.2%}"))
-    else:
-        st.warning("Not enough VIXEQ/VIX ratio history for reliable quintile analysis.")
+extreme_table = pd.DataFrame({
+    "Low gap": low_gap[["Forward 3m S&P return", "Forward 6m S&P return", "Forward 12m S&P return"]].mean(),
+    "High gap": high_gap[["Forward 3m S&P return", "Forward 6m S&P return", "Forward 12m S&P return"]].mean(),
+    "Low ratio": low_ratio[["Forward 3m S&P return", "Forward 6m S&P return", "Forward 12m S&P return"]].mean(),
+    "High ratio": high_ratio[["Forward 3m S&P return", "Forward 6m S&P return", "Forward 12m S&P return"]].mean(),
+})
 
-st.header("6. Latest values")
+st.dataframe(extreme_table.style.format("{:.2%}"))
 
-st.dataframe(core.tail(20))
+st.header("7. Latest values")
+
+st.dataframe(vixdata.tail(20))
