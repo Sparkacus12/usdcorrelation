@@ -1,74 +1,103 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Download data
-dxy = yf.download("DX-Y.NYB", auto_adjust=True, progress=False)[["Close"]]
-spx = yf.download("^GSPC", auto_adjust=True, progress=False)[["Close"]]
+st.set_page_config(page_title="DXY vs S&P 500 Correlation", layout="wide")
 
-# Weekly closes
-dxy_w = dxy.resample("W-FRI").last().rename(columns={"Close":"DXY"})
-spx_w = spx.resample("W-FRI").last().rename(columns={"Close":"SPX"})
-df = dxy_w.join(spx_w, how="inner")
+st.title("DXY vs S&P 500 Rolling Correlation")
 
-# Weekly returns
-rets = df.pct_change().dropna()
+@st.cache_data
+def load_data():
+    dxy = yf.download("DX-Y.NYB", auto_adjust=True, progress=False)[["Close"]]
+    spx = yf.download("^GSPC", auto_adjust=True, progress=False)[["Close"]]
 
-# Rolling correlations
-corr_52 = rets["DXY"].rolling(52).corr(rets["SPX"])
-corr_260 = rets["DXY"].rolling(260).corr(rets["SPX"])  # ~5 years
+    dxy = dxy.rename(columns={"Close": "DXY"})
+    spx = spx.rename(columns={"Close": "S&P 500"})
+
+    dxy_w = dxy.resample("W-FRI").last()
+    spx_w = spx.resample("W-FRI").last()
+
+    data = dxy_w.join(spx_w, how="inner")
+    returns = data.pct_change().dropna()
+
+    corr_52 = returns["DXY"].rolling(52).corr(returns["S&P 500"])
+    corr_260 = returns["DXY"].rolling(260).corr(returns["S&P 500"])
+
+    return data, corr_52, corr_260
+
+data, corr_52, corr_260 = load_data()
+
+st.write(
+    f"Data runs from **{data.index.min().date()}** to **{data.index.max().date()}**."
+)
 
 # Chart 1: 1-year rolling correlation
-plt.figure(figsize=(14,6))
-plt.plot(corr_52.index, corr_52)
-plt.axhline(0, linestyle="--")
-plt.title("1-Year Rolling Correlation: DXY vs S&P 500 (Weekly Returns)")
-plt.ylabel("Correlation")
-plt.tight_layout()
-plt.savefig("dxy_spx_corr_1yr.png")
-plt.close()
+st.subheader("1-year rolling correlation")
+
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(corr_52.index, corr_52.values)
+ax.axhline(0, linestyle="--")
+ax.set_ylabel("Correlation")
+ax.set_title("52-week rolling correlation: DXY vs S&P 500")
+st.pyplot(fig)
 
 # Chart 2: 5-year rolling correlation
-plt.figure(figsize=(14,6))
-plt.plot(corr_260.index, corr_260)
-plt.axhline(0, linestyle="--")
-plt.title("5-Year Rolling Correlation: DXY vs S&P 500 (Weekly Returns)")
-plt.ylabel("Correlation")
-plt.tight_layout()
-plt.savefig("dxy_spx_corr_5yr.png")
-plt.close()
+st.subheader("5-year rolling correlation")
 
-# Chart 3: Regime chart
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(corr_260.index, corr_260.values)
+ax.axhline(0, linestyle="--")
+ax.set_ylabel("Correlation")
+ax.set_title("260-week rolling correlation: DXY vs S&P 500")
+st.pyplot(fig)
+
+# Chart 3: regime chart
+st.subheader("Correlation regimes")
+
 regime = corr_52.dropna()
 
-x = regime.index.to_pydatetime()
-y = regime.to_numpy()
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(regime.index, regime.values)
+ax.axhline(0, linestyle="--")
 
-plt.figure(figsize=(14,6))
-plt.plot(x, y)
+for i in range(len(regime) - 1):
+    start = regime.index[i]
+    end = regime.index[i + 1]
+    value = regime.iloc[i]
 
-plt.fill_between(x, y, 0, where=(y >= 0), alpha=0.3)
-plt.fill_between(x, y, 0, where=(y < 0), alpha=0.3)
+    if value >= 0:
+        ax.axvspan(start, end, alpha=0.12)
+    else:
+        ax.axvspan(start, end, alpha=0.04)
 
-plt.axhline(0, linestyle="--")
-plt.title("Correlation Regimes: DXY vs S&P 500")
-plt.ylabel("52-week Correlation")
-plt.tight_layout()
-plt.savefig("dxy_spx_regimes.png")
-plt.close()
+ax.set_ylabel("Correlation")
+ax.set_title("Positive vs negative correlation regimes")
+st.pyplot(fig)
 
-# Chart 4: Levels + correlation
-fig, ax1 = plt.subplots(figsize=(14,6))
-ax1.plot(df.index, df["SPX"], label="S&P 500")
+# Chart 4: levels chart
+st.subheader("DXY and S&P 500 levels")
+
+fig, ax1 = plt.subplots(figsize=(14, 6))
+
+ax1.plot(data.index, data["S&P 500"])
 ax1.set_ylabel("S&P 500")
 
 ax2 = ax1.twinx()
-ax2.plot(df.index, df["DXY"], label="DXY")
+ax2.plot(data.index, data["DXY"])
 ax2.set_ylabel("DXY")
 
-plt.title("DXY and S&P 500 Levels")
-plt.tight_layout()
-plt.savefig("dxy_spx_levels.png")
-plt.close()
+ax1.set_title("DXY and S&P 500 levels")
+st.pyplot(fig)
 
-print("Files created.")
+# Data table
+st.subheader("Latest values")
+
+latest = pd.DataFrame({
+    "DXY": data["DXY"],
+    "S&P 500": data["S&P 500"],
+    "1-year correlation": corr_52,
+    "5-year correlation": corr_260
+}).dropna()
+
+st.dataframe(latest.tail(20))
