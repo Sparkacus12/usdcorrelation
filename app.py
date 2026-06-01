@@ -8,31 +8,52 @@ st.set_page_config(page_title="DXY vs S&P 500 Correlation", layout="wide")
 st.title("DXY vs S&P 500 Rolling Correlation")
 
 @st.cache_data
+def get_close(ticker, name):
+    df = yf.download(
+        ticker,
+        start="1971-01-01",
+        auto_adjust=True,
+        progress=False
+    )
+
+    if df.empty:
+        raise ValueError(f"No data downloaded for {ticker}")
+
+    close = df["Close"]
+
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+
+    close = close.rename(name)
+    return close
+
+
+@st.cache_data
 def load_data():
-    dxy = yf.download("DX-Y.NYB", auto_adjust=True, progress=False)[["Close"]]
-    spx = yf.download("^GSPC", auto_adjust=True, progress=False)[["Close"]]
+    dxy = get_close("DX-Y.NYB", "DXY")
+    spx = get_close("^GSPC", "S&P 500")
 
-    dxy = dxy.rename(columns={"Close": "DXY"})
-    spx = spx.rename(columns={"Close": "S&P 500"})
+    data = pd.concat([dxy, spx], axis=1).dropna()
+    weekly = data.resample("W-FRI").last().dropna()
 
-    dxy_w = dxy.resample("W-FRI").last()
-    spx_w = spx.resample("W-FRI").last()
-
-    data = dxy_w.join(spx_w, how="inner")
-    returns = data.pct_change().dropna()
+    returns = weekly.pct_change().dropna()
 
     corr_52 = returns["DXY"].rolling(52).corr(returns["S&P 500"])
     corr_260 = returns["DXY"].rolling(260).corr(returns["S&P 500"])
 
-    return data, corr_52, corr_260
+    latest = weekly.copy()
+    latest["1-year correlation"] = corr_52
+    latest["5-year correlation"] = corr_260
 
-data, corr_52, corr_260 = load_data()
+    return weekly, corr_52, corr_260, latest
 
-st.write(
-    f"Data runs from **{data.index.min().date()}** to **{data.index.max().date()}**."
-)
 
-# Chart 1: 1-year rolling correlation
+data, corr_52, corr_260, latest = load_data()
+
+st.write(f"Data runs from **{data.index.min().date()}** to **{data.index.max().date()}**.")
+st.write(f"Number of weekly observations: **{len(data)}**")
+
+# 1-year rolling correlation
 st.subheader("1-year rolling correlation")
 
 fig, ax = plt.subplots(figsize=(14, 6))
@@ -42,7 +63,7 @@ ax.set_ylabel("Correlation")
 ax.set_title("52-week rolling correlation: DXY vs S&P 500")
 st.pyplot(fig)
 
-# Chart 2: 5-year rolling correlation
+# 5-year rolling correlation
 st.subheader("5-year rolling correlation")
 
 fig, ax = plt.subplots(figsize=(14, 6))
@@ -52,7 +73,7 @@ ax.set_ylabel("Correlation")
 ax.set_title("260-week rolling correlation: DXY vs S&P 500")
 st.pyplot(fig)
 
-# Chart 3: regime chart
+# Regime chart
 st.subheader("Correlation regimes")
 
 regime = corr_52.dropna()
@@ -75,11 +96,10 @@ ax.set_ylabel("Correlation")
 ax.set_title("Positive vs negative correlation regimes")
 st.pyplot(fig)
 
-# Chart 4: levels chart
+# Levels chart
 st.subheader("DXY and S&P 500 levels")
 
 fig, ax1 = plt.subplots(figsize=(14, 6))
-
 ax1.plot(data.index, data["S&P 500"])
 ax1.set_ylabel("S&P 500")
 
@@ -90,14 +110,6 @@ ax2.set_ylabel("DXY")
 ax1.set_title("DXY and S&P 500 levels")
 st.pyplot(fig)
 
-# Data table
+# Latest data
 st.subheader("Latest values")
-
-latest = pd.DataFrame({
-    "DXY": data["DXY"],
-    "S&P 500": data["S&P 500"],
-    "1-year correlation": corr_52,
-    "5-year correlation": corr_260
-}).dropna()
-
-st.dataframe(latest.tail(20))
+st.dataframe(latest.dropna().tail(20))
