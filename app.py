@@ -3,9 +3,14 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="DXY vs S&P 500 Correlation", layout="wide")
+st.set_page_config(page_title="US Outperformance vs DXY", layout="wide")
 
-st.title("DXY vs S&P 500 Rolling Correlation")
+st.title("US Equity Outperformance vs the Dollar")
+
+st.write(
+    "This compares S&P 500 relative performance versus MSCI ACWI ex-US, "
+    "and then compares that relative performance with DXY."
+)
 
 @st.cache_data
 def get_close(ticker, name):
@@ -24,22 +29,26 @@ def get_close(ticker, name):
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
 
-    close = close.rename(name)
-    return close
+    return close.rename(name)
 
 
 @st.cache_data
 def load_data():
     dxy = get_close("DX-Y.NYB", "DXY")
-    spx = get_close("^GSPC", "S&P 500")
+    spx = get_close("SPY", "S&P 500 ETF")
+    exus = get_close("ACWX", "MSCI ACWI ex-US ETF")
 
-    data = pd.concat([dxy, spx], axis=1).dropna()
+    data = pd.concat([dxy, spx, exus], axis=1).dropna()
+
+    data["US relative performance"] = data["S&P 500 ETF"] / data["MSCI ACWI ex-US ETF"]
+
     weekly = data.resample("W-FRI").last().dropna()
 
-    returns = weekly.pct_change().dropna()
+    rel_returns = weekly["US relative performance"].pct_change()
+    dxy_returns = weekly["DXY"].pct_change()
 
-    corr_52 = returns["DXY"].rolling(52).corr(returns["S&P 500"])
-    corr_260 = returns["DXY"].rolling(260).corr(returns["S&P 500"])
+    corr_52 = rel_returns.rolling(52).corr(dxy_returns)
+    corr_260 = rel_returns.rolling(260).corr(dxy_returns)
 
     latest = weekly.copy()
     latest["1-year correlation"] = corr_52
@@ -53,27 +62,27 @@ data, corr_52, corr_260, latest = load_data()
 st.write(f"Data runs from **{data.index.min().date()}** to **{data.index.max().date()}**.")
 st.write(f"Number of weekly observations: **{len(data)}**")
 
-# 1-year rolling correlation
+# Chart 1
 st.subheader("1-year rolling correlation")
 
 fig, ax = plt.subplots(figsize=(14, 6))
 ax.plot(corr_52.index, corr_52.values)
 ax.axhline(0, linestyle="--")
 ax.set_ylabel("Correlation")
-ax.set_title("52-week rolling correlation: DXY vs S&P 500")
+ax.set_title("52-week rolling correlation: US relative performance vs DXY")
 st.pyplot(fig)
 
-# 5-year rolling correlation
+# Chart 2
 st.subheader("5-year rolling correlation")
 
 fig, ax = plt.subplots(figsize=(14, 6))
 ax.plot(corr_260.index, corr_260.values)
 ax.axhline(0, linestyle="--")
 ax.set_ylabel("Correlation")
-ax.set_title("260-week rolling correlation: DXY vs S&P 500")
+ax.set_title("260-week rolling correlation: US relative performance vs DXY")
 st.pyplot(fig)
 
-# Regime chart
+# Chart 3
 st.subheader("Correlation regimes")
 
 regime = corr_52.dropna()
@@ -96,20 +105,31 @@ ax.set_ylabel("Correlation")
 ax.set_title("Positive vs negative correlation regimes")
 st.pyplot(fig)
 
-# Levels chart
-st.subheader("DXY and S&P 500 levels")
+# Chart 4
+st.subheader("US relative performance vs DXY")
 
 fig, ax1 = plt.subplots(figsize=(14, 6))
-ax1.plot(data.index, data["S&P 500"])
-ax1.set_ylabel("S&P 500")
+
+ax1.plot(data.index, data["US relative performance"])
+ax1.set_ylabel("S&P 500 ETF / MSCI ACWI ex-US ETF")
 
 ax2 = ax1.twinx()
 ax2.plot(data.index, data["DXY"])
 ax2.set_ylabel("DXY")
 
-ax1.set_title("DXY and S&P 500 levels")
+ax1.set_title("US equity outperformance vs DXY")
 st.pyplot(fig)
 
-# Latest data
+# Chart 5
+st.subheader("Underlying ETFs")
+
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(data.index, data["S&P 500 ETF"], label="S&P 500 ETF")
+ax.plot(data.index, data["MSCI ACWI ex-US ETF"], label="MSCI ACWI ex-US ETF")
+ax.set_title("S&P 500 ETF and MSCI ACWI ex-US ETF")
+ax.legend()
+st.pyplot(fig)
+
+# Latest values
 st.subheader("Latest values")
 st.dataframe(latest.dropna().tail(20))
