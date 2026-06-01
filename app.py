@@ -39,10 +39,17 @@ plt.savefig("dxy_spx_corr_5yr.png")
 plt.close()
 
 # Chart 3: Regime chart
+regime = corr_52.dropna()
+
+x = regime.index.to_pydatetime()
+y = regime.to_numpy()
+
 plt.figure(figsize=(14,6))
-plt.plot(corr_52.index, corr_52)
-plt.fill_between(corr_52.index, corr_52, 0, where=(corr_52>=0), alpha=0.3)
-plt.fill_between(corr_52.index, corr_52, 0, where=(corr_52<0), alpha=0.3)
+plt.plot(x, y)
+
+plt.fill_between(x, y, 0, where=(y >= 0), alpha=0.3)
+plt.fill_between(x, y, 0, where=(y < 0), alpha=0.3)
+
 plt.axhline(0, linestyle="--")
 plt.title("Correlation Regimes: DXY vs S&P 500")
 plt.ylabel("52-week Correlation")
