@@ -8,7 +8,7 @@ st.set_page_config(page_title="DXY, Equities, Yields and VIXEQ", layout="wide")
 st.title("DXY, Equities, Yield Differentials and VIXEQ")
 
 START_DATE = "1973-01-01"
-VIX_FILE = "vix_data.xlsx"
+VIX_FILE = "vix data.xlsx"
 
 
 @st.cache_data
